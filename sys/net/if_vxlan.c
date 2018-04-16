@@ -68,6 +68,7 @@ struct vxlan_softc {
 
 	struct sockaddr_storage	 sc_src;
 	struct sockaddr_storage	 sc_dst;
+	in_port_t		 sc_srcport;
 	in_port_t		 sc_dstport;
 	u_int			 sc_rdomain;
 	int64_t			 sc_vnetid;
@@ -134,6 +135,7 @@ vxlan_clone_create(struct if_clone *ifc, int unit)
 	    (sizeof(struct in_multi *) * IP_MIN_MEMBERSHIPS), M_IPMOPTS,
 	    M_WAITOK|M_ZERO);
 	sc->sc_imo.imo_max_memberships = IP_MIN_MEMBERSHIPS;
+	sc->sc_srcport = htons(VXLAN_PORT);
 	sc->sc_dstport = htons(VXLAN_PORT);
 	sc->sc_vnetid = VXLAN_VNI_UNSET;
 	sc->sc_df = htons(0);
@@ -389,6 +391,9 @@ vxlan_config(struct ifnet *ifp, struct sockaddr *src, struct sockaddr *dst)
 	if ((error = vxlan_multicast_join(ifp, src, dst)) != 0)
 		return (error);
 
+	if ((port = vxlan_sockaddr_port(src)) != 0)
+		sc->sc_srcport = port;
+
 	if ((port = vxlan_sockaddr_port(dst)) != 0)
 		sc->sc_dstport = port;
 
@@ -454,6 +459,7 @@ vxlanioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 		vxlan_multicast_cleanup(ifp);
 		bzero(&sc->sc_src, sizeof(sc->sc_src));
 		bzero(&sc->sc_dst, sizeof(sc->sc_dst));
+		sc->sc_srcport = htons(VXLAN_PORT);
 		sc->sc_dstport = htons(VXLAN_PORT);
 		break;
 
@@ -651,7 +657,7 @@ vxlan_lookup(struct mbuf *m, struct udphdr *uh, int iphlen,
 	NET_ASSERT_LOCKED();
 	/* First search for a vxlan(4) interface with the packet's VNI */
 	LIST_FOREACH(sc, &vxlan_tagh[VXLAN_TAGHASH(vni)], sc_entry) {
-		if ((uh->uh_dport == sc->sc_dstport) &&
+		if ((uh->uh_dport == sc->sc_srcport) &&
 		    vni == sc->sc_vnetid &&
 		    sc->sc_rdomain == rtable_l2(m->m_pkthdr.ph_rtableid)) {
 			sc_cand = sc;
@@ -668,7 +674,7 @@ vxlan_lookup(struct mbuf *m, struct udphdr *uh, int iphlen,
 	 * code is not reached as the other interface is more specific.
 	 */
 	LIST_FOREACH(sc, &vxlan_any, sc_entry) {
-		if ((uh->uh_dport == sc->sc_dstport) &&
+		if ((uh->uh_dport == sc->sc_srcport) &&
 		    (sc->sc_rdomain == rtable_l2(m->m_pkthdr.ph_rtableid))) {
 			sc_cand = sc;
 			goto found;
@@ -863,7 +869,7 @@ vxlan_output(struct ifnet *ifp, struct mbuf *m)
 	af = src->sa_family;
 
 	vu = mtod(m, struct vxlanudphdr *);
-	vu->vu_u.uh_sport = sc->sc_dstport;
+	vu->vu_u.uh_sport = sc->sc_srcport;
 	vu->vu_u.uh_dport = sc->sc_dstport;
 	vu->vu_u.uh_ulen = htons(m->m_pkthdr.len);
 	vu->vu_u.uh_sum = 0;
@@ -991,6 +997,7 @@ vxlan_if_change(void *arg)
 	vxlan_multicast_cleanup(ifp);
 	memset(&sc->sc_src, 0, sizeof(sc->sc_src));
 	memset(&sc->sc_dst, 0, sizeof(sc->sc_dst));
+	sc->sc_srcport = htons(VXLAN_PORT);
 	sc->sc_dstport = htons(VXLAN_PORT);
 }
 

@@ -2761,6 +2761,26 @@ print_tunnel(const struct if_laddrreq *req)
 
 	printf("inet%s %s", ver, psrcaddr);
 
+	if (req->addr.ss_family != AF_UNSPEC) {
+		in_port_t srcport = 0;
+		const struct sockaddr_in *sin;
+		const struct sockaddr_in6 *sin6;
+
+		switch (req->addr.ss_family) {
+		case AF_INET:
+			sin = (const struct sockaddr_in *)&req->addr;
+			srcport = sin->sin_port;
+			break;
+		case AF_INET6:
+			sin6 = (const struct sockaddr_in6 *)&req->addr;
+			srcport = sin6->sin6_port;
+			break;
+		}
+
+		if (srcport)
+			printf(":%u", ntohs(srcport));
+	}
+
 	if (req->dstaddr.ss_family != AF_UNSPEC) {
 		in_port_t dstport = 0;
 		const struct sockaddr_in *sin;
@@ -3264,25 +3284,38 @@ in6_status(int force)
 void
 settunnel(const char *src, const char *dst)
 {
-	char buf[HOST_NAME_MAX+1 + sizeof (":65535")], *dstport;
-	const char *dstip;
+	char srcbuf[HOST_NAME_MAX+1 + sizeof (":65535")], *srcport;
+	char dstbuf[HOST_NAME_MAX+1 + sizeof (":65535")], *dstport;
+	const char *srcip, *dstip;
 	struct addrinfo *srcres, *dstres;
 	int ecode;
 	struct if_laddrreq req;
+
+	if (strchr(src, ':') == NULL || strchr(src, ':') != strrchr(src, ':')) {
+		/* no port or IPv6 */
+		srcip = src;
+		srcport = NULL;
+	} else {
+		if (strlcpy(srcbuf, src, sizeof(srcbuf)) >= sizeof(srcbuf))
+			errx(1, "%s bad value", src);
+		srcport = strchr(srcbuf, ':');
+		*srcport++ = '\0';
+		srcip = srcbuf;
+	}
 
 	if (strchr(dst, ':') == NULL || strchr(dst, ':') != strrchr(dst, ':')) {
 		/* no port or IPv6 */
 		dstip = dst;
 		dstport = NULL;
 	} else {
-		if (strlcpy(buf, dst, sizeof(buf)) >= sizeof(buf))
+		if (strlcpy(dstbuf, dst, sizeof(dstbuf)) >= sizeof(dstbuf))
 			errx(1, "%s bad value", dst);
-		dstport = strchr(buf, ':');
+		dstport = strchr(dstbuf, ':');
 		*dstport++ = '\0';
-		dstip = buf;
+		dstip = dstbuf;
 	}
 
-	if ((ecode = getaddrinfo(src, NULL, NULL, &srcres)) != 0)
+	if ((ecode = getaddrinfo(srcip, srcport, NULL, &srcres)) != 0)
 		errx(1, "error in parsing address string: %s",
 		    gai_strerror(ecode));
 
